@@ -1,0 +1,60 @@
+MITRE ATT&CK Technique: T1059.001 — Command and Scripting Interpreter: PowerShell
+Tactic: Execution
+Platform: Windows
+
+DESCRIPTION
+Adversaries may abuse PowerShell commands and scripts for execution. PowerShell is a powerful interactive command-line interface and scripting environment included in the Windows operating system. Adversaries can use PowerShell to perform a number of actions, including discovery of information and execution of code.
+
+PowerShell is commonly abused because it is trusted by Windows, can bypass many security controls, supports obfuscation, and allows direct interaction with the .NET framework and Windows APIs. Malicious use is often identified by the use of encoded commands (-EncodedCommand), unusual execution policies, downloading payloads from the internet (IEX, Invoke-WebRequest), or running entirely in memory (fileless attacks).
+
+COMMON MALICIOUS PATTERNS
+- Encoded command execution: powershell.exe -EncodedCommand <Base64>
+- Download and execute (cradle): IEX (New-Object Net.WebClient).DownloadString('http://...')
+- Bypass execution policy: powershell -ExecutionPolicy Bypass -File script.ps1
+- Hidden window execution: powershell -WindowStyle Hidden -Command ...
+- Reflective DLL injection via PowerShell
+- AMSI bypass: [Ref].Assembly.GetType('...').GetField('...').SetValue(...)
+- Disabling Windows Defender: Set-MpPreference -DisableRealtimeMonitoring $true
+- Credential harvesting: Invoke-Mimikatz (via PowerSploit)
+
+INDICATORS OF COMPROMISE (IOCs)
+- powershell.exe spawned by unusual parent process (Word, Excel, cmd.exe in temp dirs)
+- Long command line with Base64-encoded strings (-enc, -EncodedCommand)
+- PowerShell making outbound network connections (unusual for legitimate scripts)
+- Script block logging events (Event ID 4104) with suspicious keywords: IEX, DownloadString, WebClient, Bypass, Hidden, Mimikatz, Invoke-
+- PowerShell running from temp directories (%TEMP%, %APPDATA%)
+- Encoded payload length >200 characters
+- PowerShell accessing LSASS process memory
+- Execution policy set to Bypass or Unrestricted
+
+DETECTION METHODS
+- Enable PowerShell Script Block Logging (Event ID 4104)
+- Enable PowerShell Module Logging (Event ID 4103)
+- Enable PowerShell Transcription logging
+- Monitor for powershell.exe with -enc or -EncodedCommand flags
+- Alert on PowerShell making external HTTP/HTTPS connections
+- Decode Base64 arguments and scan content for malicious keywords
+- Track powershell.exe parent process lineage
+- Wazuh rules: 92651-92654 (PowerShell suspicious commands)
+
+RESPONSE ACTIONS (priority order)
+1. Capture the full PowerShell command line including encoded payload — decode Base64 for analysis (collect_logs, L4)
+2. Isolate the affected endpoint to prevent lateral movement or C2 communication (isolate_host, L6 — approval required)
+3. Kill the suspicious PowerShell process if still running (kill_process, L5 — approval required)
+4. Tag any C2 IP addresses or URLs extracted from the decoded payload (tag_ioc, L4)
+5. Check for persistence mechanisms (scheduled tasks, registry run keys, startup folders)
+6. Review parent process that spawned PowerShell (document office app abuse, phishing vector)
+7. Search for similar PowerShell executions across other endpoints in the environment
+8. Notify analyst and escalate if Mimikatz or credential harvesting indicators are found (notify_analyst, L0)
+
+SEVERITY ASSESSMENT
+- Encoded PowerShell with no network activity: MEDIUM — suspicious, needs investigation
+- Encoded PowerShell with outbound connections: HIGH — likely active malware
+- Credential harvesting detected (Mimikatz patterns): CRITICAL
+- PowerShell disabling defenses: HIGH to CRITICAL
+
+MITRE DATA SOURCES
+- Process creation logs (Sysmon Event ID 1, Windows Event ID 4688)
+- PowerShell logs (Event IDs 4103, 4104)
+- Network connections from powershell.exe
+- File system changes in temp directories

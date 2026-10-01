@@ -1,0 +1,26 @@
+# Environment
+.env
+.env.*
+
+# SSL certs (generated, not stored in git)
+config/wazuh_indexer_ssl_certs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

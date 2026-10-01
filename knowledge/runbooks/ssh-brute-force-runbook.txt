@@ -1,0 +1,118 @@
+SOC RUNBOOK: SSH Brute Force Attack Response
+Document ID: RB-001
+Severity Scope: MEDIUM (failed attempts only) / HIGH (successful login after failures)
+Last Updated: 2026-09-18
+
+OVERVIEW
+This runbook guides the SOC analyst through the detection, containment, and recovery process for an SSH brute force attack. A brute force attack consists of repeated failed authentication attempts, often followed by a successful login indicating account compromise.
+
+Trigger conditions:
+- Wazuh rule 5716: Multiple SSH authentication failures from same source IP
+- Wazuh rule 5712: Multiple SSH failures targeting different users from same IP
+- Wazuh rule 5715: Successful SSH login after multiple failures (HIGH — immediate action)
+
+---
+
+PHASE 1 — TRIAGE (0–5 minutes)
+
+1.1 Confirm the alert is not a false positive:
+    - Is the source IP an internal monitoring tool (Nagios, Zabbix, vulnerability scanner)?
+    - Is the targeted account a honeypot or test account?
+    - Is this a scheduled automated process (backup scripts, deployment tools)?
+    If yes to any: document rationale and close as false positive.
+
+1.2 Determine attack scope:
+    - How many failed attempts? (>10 = significant)
+    - How many distinct usernames targeted? (spray vs. focused)
+    - Was there a successful login? (rule 5715 = YES → escalate to CRITICAL)
+    - What time did the attack occur? (off-hours = higher suspicion)
+
+1.3 Gather initial evidence:
+    - Source IP address
+    - Targeted username(s)
+    - Affected host (agent name)
+    - Time window of the attack
+    - Whether any session was opened after a successful login
+
+---
+
+PHASE 2 — CONTAINMENT (5–15 minutes)
+
+2.1 Block the source IP (AI action: block_ip, L4 — automatic):
+    - Add source IP to firewall block list
+    - Block at perimeter AND on the affected host (iptables/ufw)
+    - Document the block: timestamp, IP, reason, blocking analyst
+
+2.2 If successful login was detected (rule 5715):
+    - Disable the compromised account immediately (AI action: disable_account, L6 — REQUIRES APPROVAL)
+    - Analyst must approve via the approval queue in the dashboard
+    - Do NOT wait — a compromised account can be used for lateral movement
+    - Force logout of all active sessions for the account: pkill -u <username>
+
+2.3 Preserve evidence BEFORE making system changes:
+    - Collect full authentication log: /var/log/auth.log (AI action: collect_logs, L4)
+    - Capture: who output, last output, active network connections (ss -tnp)
+    - Save the output before killing sessions or disabling accounts
+
+---
+
+PHASE 3 — INVESTIGATION (15–45 minutes)
+
+3.1 Analyse the attacker session (if login succeeded):
+    - What commands did the attacker run? Check: ~/.bash_history, /var/log/auth.log
+    - Did the attacker escalate privileges? (sudo usage, su, setuid binaries)
+    - Did the attacker exfiltrate data? (outbound data transfers, curl/wget usage)
+    - Did the attacker establish persistence? (new SSH keys, cron jobs, new users, web shells)
+    - Check for lateral movement: did the attacker SSH to other hosts from this system?
+
+3.2 Assess the compromised account:
+    - What system privileges does this account have?
+    - Is it a service account with access to databases, APIs, or sensitive files?
+    - Does it have sudo access?
+
+3.3 Threat intelligence:
+    - Look up the source IP in threat intel feeds (AbuseIPDB, VirusTotal)
+    - Tag the IP as IOC if confirmed malicious (AI action: tag_ioc, L4)
+    - Check if the IP has been seen in other incidents
+
+---
+
+PHASE 4 — RECOVERY (45–90 minutes)
+
+4.1 Account remediation:
+    - Force password reset for the compromised account (and any accounts with the same password)
+    - Review and revoke all SSH public keys for the account
+    - Re-enable account only after password is changed and forensics are complete
+
+4.2 System hardening:
+    - Confirm /etc/ssh/sshd_config has: PermitRootLogin no, MaxAuthTries 3, PasswordAuthentication no (prefer keys)
+    - Consider changing SSH port from 22 to a non-standard port
+    - Implement fail2ban or equivalent brute force protection
+    - Review and restrict which IPs can reach port 22 (network ACL)
+
+4.3 Verify clean state:
+    - Scan for backdoors: new user accounts, authorized_keys files, cron jobs, SUID binaries
+    - Run rootkit check: rkhunter --check
+    - Verify system binary integrity: debsums -c (Debian) or rpm -Va (RHEL)
+
+---
+
+PHASE 5 — POST-INCIDENT
+
+5.1 Documentation:
+    - Complete incident record in AI-SOC with full timeline
+    - Document all actions taken, approvals granted, evidence collected
+    - Calculate MTTR (Mean Time To Respond)
+
+5.2 Lessons learned:
+    - Was the source IP already known malicious? (missed IOC blocking)
+    - Was MFA enabled? (if not, recommend enabling)
+    - Was password policy strong enough?
+    - Should this host have been internet-accessible on port 22?
+
+5.3 Escalation criteria (escalate to CRITICAL + senior analyst):
+    - Attacker gained root access
+    - Evidence of lateral movement to other hosts
+    - Sensitive data accessed or exfiltrated
+    - Persistence mechanisms found
+    - Multiple hosts targeted simultaneously

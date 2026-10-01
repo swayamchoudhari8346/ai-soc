@@ -1,0 +1,51 @@
+MITRE ATT&CK Technique: T1110 — Brute Force
+Tactic: Credential Access
+Platform: Linux, Windows, macOS, Network
+
+DESCRIPTION
+Adversaries may use brute force techniques to gain access to accounts when passwords are unknown or when password hashes are obtained. Without knowledge of the password for an account or set of accounts, an adversary may systematically guess the password using a repetitive or iterative mechanism. Brute forcing passwords can take place via interaction with a service that will check the validity of those credentials, or offline against previously acquired credential data.
+
+SUBTECHNIQUES
+- T1110.001 Password Guessing: Simple dictionary or wordlist attacks against login services.
+- T1110.002 Password Cracking: Offline cracking of captured password hashes.
+- T1110.003 Password Spraying: A few commonly used passwords tried against many accounts.
+- T1110.004 Credential Stuffing: Previously breached username/password pairs reused.
+
+INDICATORS OF COMPROMISE (IOCs)
+- Multiple failed authentication attempts from a single source IP in a short time window
+- Failed logins followed by a successful login from the same IP (account compromise pattern)
+- Authentication failures targeting a single account (focused brute force)
+- Authentication failures across many accounts from one IP (password spraying)
+- Logins from unusual geographic locations or IP ranges
+- Logins at unusual hours for the affected account
+- SSH rule IDs in Wazuh: 5710 (single failure), 5711 (multiple failures same user),
+  5712 (multiple failures different users), 5716 (multiple failures from same IP),
+  5715 (success after multiple failures — HIGH confidence compromise)
+
+DETECTION METHODS
+- Monitor authentication logs: /var/log/auth.log, /var/log/secure
+- Alert on >5 failed logins from same IP within 60 seconds
+- Alert on successful login after ≥3 failures within 5 minutes (Wazuh rule 5715)
+- Track login success rate per source IP
+- Baseline normal login times and flag deviations
+- Monitor for logins to service accounts or administrator accounts outside business hours
+
+RESPONSE ACTIONS (priority order)
+1. Block the source IP at the firewall immediately (block_ip action, L4 risk)
+2. Lock or disable the targeted account if compromise is suspected (disable_account, L6 — approval required)
+3. Force password reset on the affected account
+4. Collect and preserve full authentication logs from the affected host (collect_logs, L4)
+5. Check if the successful login session performed any lateral movement or privilege escalation
+6. Tag the source IP as a known malicious IOC (tag_ioc, L4)
+7. Review all sessions opened by the compromised account after the successful brute force
+8. Notify the account owner and security team (notify_analyst, L0)
+
+SEVERITY ASSESSMENT
+- Failed logins only (no success): LOW to MEDIUM depending on volume
+- Successful login after failures: HIGH — assume account is compromised
+- Privileged account targeted (root, admin): CRITICAL
+
+MITRE DATA SOURCES
+- Authentication logs
+- User account metadata
+- Network traffic (login protocols: SSH port 22, RDP port 3389, SMB port 445)
