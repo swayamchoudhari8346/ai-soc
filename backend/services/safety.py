@@ -242,7 +242,44 @@ def _process_single_action(action: Action, db: Session) -> dict[str, Any]:
             "detail":      f"Approval required (L{action.risk_level}, policy={action.policy_decision}).",
         }
 
-    # ── L0–L4, allowed — auto-execute ─────────────────────────────────────────
+    # ── L0–L4, allowed — auto-execute (simulated) ─────────────────────────────
+    # Defense in depth: never auto-execute when policy requires approval or
+    # risk is above the auto-execute ceiling (should already be handled above).
+    if (
+        action.policy_decision == "require_approval"
+        or (action.risk_level is not None and action.risk_level > _AUTO_EXECUTE_MAX)
+    ):
+        action.status = "pending"
+        _write_action_audit(
+            action, db,
+            event_type  = "safety.approval_required",
+            description = (
+                f"Refused auto-execute for '{action.action_type}' on "
+                f"'{action.target}' (L{action.risk_level}, "
+                f"policy={action.policy_decision}); queued for approval."
+            ),
+        )
+        existing_approval = (
+            db.query(Approval)
+            .filter(Approval.action_id == action.id)
+            .first()
+        )
+        if existing_approval is None:
+            db.add(Approval(
+                action_id  = action.id,
+                approver   = None,
+                decision   = None,
+                reason     = None,
+                decided_at = None,
+            ))
+        return {
+            "action_id":   action.id,
+            "action_type": action.action_type,
+            "risk_level":  action.risk_level,
+            "outcome":     "queued_for_approval",
+            "detail":      "Auto-execute refused; approval required.",
+        }
+
     exec_result = _simulate_execute(action)
     action.status = "executed"
 
@@ -251,8 +288,8 @@ def _process_single_action(action: Action, db: Session) -> dict[str, Any]:
         event_type  = "safety.action_executed",
         description = (
             f"Auto-executed L{action.risk_level} action "
-            f"'{action.action_type}' on '{action.target}'. "
-            f"Result: {exec_result['result']}"
+            f"'{action.action_type}' on '{action.target}' "
+            f"(simulated). Result: {exec_result['result']}"
         ),
     )
     return {
@@ -261,6 +298,7 @@ def _process_single_action(action: Action, db: Session) -> dict[str, Any]:
         "risk_level":  action.risk_level,
         "outcome":     "auto_executed",
         "detail":      exec_result["result"],
+        "simulated":   True,
     }
 
 
@@ -323,6 +361,78 @@ async def execute_approved_actions(
     results = []
 
     for action in approved_actions:
+        # Enforce policy + approval record before any (simulated) execution.
+        if action.policy_decision == "block":
+            action.status = "blocked"
+            _write_action_audit(
+                action, db,
+                event_type  = "action.blocked",
+                description = (
+                    f"Refused execution of '{action.action_type}' on "
+                    f"'{action.target}': policy decision is block."
+                ),
+            )
+            results.append({
+                "action_id":   action.id,
+                "action_type": action.action_type,
+                "target":      action.target,
+                "risk_level":  action.risk_level,
+                "outcome":     "refused_policy_block",
+                "detail":      action.policy_reason or "Blocked by policy.",
+            })
+            continue
+
+        approval = (
+            db.query(Approval)
+            .filter(
+                Approval.action_id == action.id,
+                Approval.decision == "approved",
+            )
+            .first()
+        )
+        if approval is None:
+            logger.warning(
+                "Action %d marked approved but has no approved Approval row — refusing",
+                action.id,
+            )
+            _write_action_audit(
+                action, db,
+                event_type  = "action.execution_refused",
+                description = (
+                    f"Refused execution of '{action.action_type}' on "
+                    f"'{action.target}': no matching approved Approval record."
+                ),
+            )
+            results.append({
+                "action_id":   action.id,
+                "action_type": action.action_type,
+                "target":      action.target,
+                "risk_level":  action.risk_level,
+                "outcome":     "refused_missing_approval",
+                "detail":      "Action status=approved but no Approval(decision=approved) found.",
+            })
+            continue
+
+        if action.risk_level is not None and action.risk_level >= _NEVER_AUTONOMOUS:
+            action.status = "blocked"
+            _write_action_audit(
+                action, db,
+                event_type  = "action.blocked",
+                description = (
+                    f"Refused execution of L{action.risk_level} action "
+                    f"'{action.action_type}' — L7+ is never executable."
+                ),
+            )
+            results.append({
+                "action_id":   action.id,
+                "action_type": action.action_type,
+                "target":      action.target,
+                "risk_level":  action.risk_level,
+                "outcome":     "refused_l7",
+                "detail":      "L7 actions are never executable.",
+            })
+            continue
+
         exec_result = _simulate_execute(action)
         action.status = "executed"
 
@@ -331,8 +441,8 @@ async def execute_approved_actions(
             event_type  = "action.executed",
             description = (
                 f"Analyst-approved L{action.risk_level} action "
-                f"'{action.action_type}' on '{action.target}' executed. "
-                f"Result: {exec_result['result']}"
+                f"'{action.action_type}' on '{action.target}' executed "
+                f"(simulated). Result: {exec_result['result']}"
             ),
         )
 
@@ -343,37 +453,39 @@ async def execute_approved_actions(
             "risk_level":  action.risk_level,
             "outcome":     "executed",
             "detail":      exec_result["result"],
+            "simulated":   True,
         })
 
         logger.info(
-            "EXECUTED approved L%d action: %s on %s",
+            "EXECUTED approved L%d action: %s on %s (simulated)",
             action.risk_level, action.action_type, action.target,
         )
 
     db.commit()
 
-    # Summary audit entry
+    executed = [r for r in results if r["outcome"] == "executed"]
+    refused  = [r for r in results if r["outcome"] != "executed"]
+
+    # Summary audit entry — only claim execution for outcomes that actually ran
     audit_summary = AuditLog(
         incident_id = incident_id,
-        event_type  = "remediation.complete",
+        event_type  = "remediation.complete" if executed else "remediation.refused",
         actor       = "system",
         description = (
-            f"Controlled remediation complete for {incident_id}. "
-            f"{len(results)} approved action(s) executed."
+            f"Controlled remediation for {incident_id}: "
+            f"{len(executed)} executed (simulated), {len(refused)} refused."
         ),
         metadata_ = {
-            "executed_count": len(results),
-            "actions": [
-                {"action_type": r["action_type"], "target": r["target"]}
-                for r in results
-            ],
+            "executed_count": len(executed),
+            "refused_count":  len(refused),
+            "actions": results,
         },
     )
     db.add(audit_summary)
     db.commit()
 
     logger.info(
-        "Remediation complete for %s: %d action(s) executed",
-        incident_id, len(results),
+        "Remediation for %s: %d executed, %d refused",
+        incident_id, len(executed), len(refused),
     )
     return results

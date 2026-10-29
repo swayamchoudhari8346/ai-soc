@@ -34,9 +34,9 @@ async function request(path, options = {}) {
 
 // ── Incidents ─────────────────────────────────────────────────────────────────
 
-/** List incidents, newest first. */
-export function fetchIncidents(limit = 50, offset = 0) {
-  return request(`/incidents/?limit=${limit}&offset=${offset}`);
+/** List incidents, newest first. Backend pagination uses `skip`, not `offset`. */
+export function fetchIncidents(limit = 50, skip = 0) {
+  return request(`/incidents/?limit=${limit}&skip=${skip}`);
 }
 
 /** Get a single incident by incident_id. */
@@ -96,4 +96,12 @@ export function decideApproval(approvalId, decision, approver = 'analyst', reaso
     method: 'POST',
     body: JSON.stringify({ decision, approver, reason }),
   });
+}
+
+/**
+ * Execute analyst-approved actions for an incident (simulated remediation).
+ * Call after a successful approve decision so action/audit states advance.
+ */
+export function executeApproved(incidentId) {
+  return request(`/incidents/${incidentId}/execute-approved`, { method: 'POST' });
 }

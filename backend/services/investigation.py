@@ -260,30 +260,67 @@ async def investigate_incident(incident_id: str, db: Session) -> dict[str, Any]:
         raw_response = await call_ollama(messages=messages)
     except RuntimeError as exc:
         logger.error("Ollama call failed for %s: %s", incident_id, exc)
+        incident.status = "open"
+        db.add(AuditLog(
+            incident_id = incident_id,
+            event_type  = "incident.investigation_failed",
+            actor       = "ai_agent",
+            description = f"AI investigation failed for {incident_id}: LLM unavailable.",
+            metadata_   = {"error": "llm_unavailable", "detail": str(exc)[:500]},
+        ))
+        db.commit()
         raise HTTPException(
             status_code=503,
-            detail=f"LLM service unavailable: {exc}",
+            detail=(
+                f"LLM service unavailable: {exc}. "
+                "Prerequisite: Ollama must be reachable at OLLAMA_HOST "
+                "with model llama3.1:8b pulled."
+            ),
         ) from exc
 
     logger.debug("Raw LLM response for %s:\n%s", incident_id, raw_response)
 
     # ── 5. Parse response ─────────────────────────────────────────────────────
+    # Do not invent a successful classification/actions when the model fails.
     try:
         report = _extract_json(raw_response)
         report = _validate_report(report)
     except (ValueError, Exception) as exc:
         logger.error("Failed to parse LLM response for %s: %s", incident_id, exc)
-        # Store the raw response so it's not lost
-        report = _validate_report({
-            "classification":   "Parse Error",
-            "severity":         incident.severity,
-            "summary":          "LLM returned a response that could not be parsed as JSON.",
-            "evidence_summary": "Raw LLM output stored in raw_llm_response field.",
+        incident.status = "open"
+        incident.ai_report = {
+            "investigation_failed": True,
+            "error": "llm_parse_error",
+            "detail": str(exc)[:500],
             "raw_llm_response": raw_response[:4000],
-        })
+            "rag_context": [c["source"] for c in rag_chunks],
+        }
+        db.add(AuditLog(
+            incident_id = incident_id,
+            event_type  = "incident.investigation_failed",
+            actor       = "ai_agent",
+            description = (
+                f"AI investigation failed for {incident_id}: "
+                f"LLM output could not be parsed as a valid JSON report."
+            ),
+            metadata_   = {
+                "error": "llm_parse_error",
+                "rag_sources": [c["source"] for c in rag_chunks],
+            },
+        ))
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "LLM returned output that could not be parsed as a valid "
+                "investigation report. No actions were created. "
+                "Check Ollama model output and retry."
+            ),
+        ) from exc
 
     # Attach the RAG sources used so they're visible in the report
     report["rag_context"] = [c["source"] for c in rag_chunks]
+    report["investigation_failed"] = False
 
     # ── 6. Evaluate actions through policy engine ─────────────────────────────
     # Delete any existing Action rows for this incident (idempotent re-investigation).

@@ -150,6 +150,7 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
       - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      - ANONYMIZED_TELEMETRY=False
     volumes:
       - ./backend:/app      # live reload in development
       - chroma_data:/app/chroma_data  # ChromaDB persistent vector store

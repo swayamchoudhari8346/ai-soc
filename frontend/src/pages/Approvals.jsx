@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchApprovals, decideApproval } from '../api';
+import { fetchApprovals, decideApproval, executeApproved } from '../api';
 
 /**
  * Approvals page — shows the pending approval queue.
@@ -30,11 +30,22 @@ export default function Approvals() {
   async function handleDecide(approvalId, decision) {
     setDeciding(prev => ({ ...prev, [approvalId]: true }));
     try {
+      const approval = approvals.find(a => a.id === approvalId);
+      const incidentId = approval?.action?.incident_id;
+
       await decideApproval(approvalId, decision, 'analyst', '');
-      // Remove decided row from list
+
+      // After approve, run the same execute-approved step the e2e pipeline uses.
+      // Rejected actions stay rejected and are not executed.
+      if (decision === 'approved' && incidentId) {
+        await executeApproved(incidentId);
+      }
+
       setApprovals(prev => prev.filter(a => a.id !== approvalId));
     } catch (err) {
       alert(`Decision failed: ${err.message}`);
+      // Refresh in case decide succeeded but execute failed — queue must stay accurate
+      await loadApprovals();
     } finally {
       setDeciding(prev => ({ ...prev, [approvalId]: false }));
     }

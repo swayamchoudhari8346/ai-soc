@@ -3,7 +3,7 @@ routers/investigation.py — Investigation API endpoint.
 
 POST /incidents/{incident_id}/investigate
   Triggers the AI investigation agent for a specific incident.
-  Returns the structured investigation report.
+  Returns the structured investigation report (flat fields + metadata).
 """
 
 import logging
@@ -41,16 +41,19 @@ async def trigger_investigation(
     - Saves the report to `incidents.ai_report` in PostgreSQL.
     - Writes an audit log entry for `incident.investigated`.
 
-    **Returns** the investigation report JSON directly.
+    **Returns** the investigation report fields at the top level (plus
+    `incident_id` and `status`) so clients and e2e scripts can read
+    `classification` / `mitre_technique` without unwrapping a nested object.
 
     **Errors:**
     - `404` — incident not found
+    - `502` — LLM returned output that could not be parsed as a valid report
     - `503` — Ollama is unreachable or timed out
     """
     logger.info("Investigation requested for incident_id=%s", incident_id)
     report = await investigate_incident(incident_id=incident_id, db=db)
     return {
+        **report,
         "incident_id": incident_id,
         "status": "investigation_complete",
-        "report": report,
     }

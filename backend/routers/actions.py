@@ -158,10 +158,11 @@ async def execute_approved(
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found.")
 
     results = await execute_approved_actions(incident_id=incident_id, db=db)
+    executed_count = sum(1 for r in results if r.get("outcome") == "executed")
 
     return {
         "incident_id":    incident_id,
-        "status":         "remediation_complete",
-        "executed_count": len(results),
+        "status":         "remediation_complete" if executed_count else "remediation_noop",
+        "executed_count": executed_count,
         "actions":        results,
     }

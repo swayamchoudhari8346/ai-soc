@@ -33,6 +33,10 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+# Disable Chroma anonymous Posthog telemetry before importing chromadb.
+# (Broken posthog capture() otherwise floods ERROR logs without affecting retrieval.)
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+
 import chromadb
 import httpx
 

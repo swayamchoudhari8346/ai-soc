@@ -175,11 +175,14 @@ def run(base_url: str, approver: str):
     if approved_count == 0:
         print("  (nothing to approve)")
 
-    # ── Step 6: Execute approved actions ─────────────────────────────────────
-    print(f"\nSTEP 6 — Execute approved actions")
+    # ── Step 6: Execute approved actions (idempotent; decide already executes) ─
+    print(f"\nSTEP 6 — Execute approved actions (idempotent re-check)")
     exec_result = post(f"{base_url}/incidents/{incident_id}/execute-approved")
     executed = exec_result.get("executed_count", 0)
-    print(f"  ✓ Executed {executed} approved action(s)")
+    if approved_count > 0 and executed == 0:
+        print("  ✓ No remaining approved actions (already executed on decide)")
+    else:
+        print(f"  ✓ Executed {executed} approved action(s)")
     for action in exec_result.get("actions", []):
         print(f"    ✓ {action.get('action_type'):20s} L{action.get('risk_level')}  → {action.get('detail')}")
 

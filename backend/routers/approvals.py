@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.models import Action, Approval, AuditLog
+from services.safety import execute_approved_actions
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ def get_approval(
     summary="Approve or reject a queued action",
     response_description="Updated approval record",
 )
-def decide_approval(
+async def decide_approval(
     approval_id: int,
     body: ApprovalDecision,
     db: Session = Depends(get_db),
@@ -128,8 +129,9 @@ def decide_approval(
     - **approver**: analyst username (e.g. `"analyst1"`)
     - **reason**: optional free-text explanation
 
-    On approval → action status set to `"approved"` (execution happens in Phase 9).
-    On rejection → action status set to `"rejected"`.
+    On approval → action status set to `"approved"`, then simulated execution
+    runs immediately via the safety engine (policy + Approval-row checks still apply).
+    On rejection → action status set to `"rejected"` (no execution).
 
     **Errors:**
     - `404` — approval not found
@@ -190,4 +192,14 @@ def decide_approval(
         action.target if action else "?",
     )
 
-    return _approval_to_dict(approval)
+    execution = None
+    if body.decision == "approved" and action and action.incident_id:
+        # Advance approved actions through the same guarded executor used by
+        # POST /incidents/{id}/execute-approved (idempotent if called again).
+        execution = await execute_approved_actions(action.incident_id, db)
+        db.refresh(approval)
+
+    result = _approval_to_dict(approval)
+    if execution is not None:
+        result["execution"] = execution
+    return result
